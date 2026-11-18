@@ -7,7 +7,7 @@ WORKDIR /app
 RUN useradd --create-home --uid 10001 worker
 COPY requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
-COPY grib_generator.py server.py ./
+COPY grib_generator.py noaa_generator.py server.py ./
 USER worker
 EXPOSE 10000
 CMD ["python", "server.py"]

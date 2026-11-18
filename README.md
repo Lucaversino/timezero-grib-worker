@@ -1,41 +1,32 @@
-# TimeZero GRIB Worker para Render (Painel de Bordo V280)
+# NOAA GFS -> GRIB1 TimeZero | Render Worker V283
 
-Serviço HTTP independente para executar `grib_generator.py` com **ecCodes**. O painel continua na Vercel. **Este projeto não contém o painel Next.js**.
+**Esta versão substitui Open-Meteo como fonte do gerador.** O modelo oficial NOAA GFS é entregue em GRIB2, recortado pelo NOMADS e codificado novamente em GRIB1 com ecCodes. Não altera medições nem preenche valores ausentes. Os dados representam previsões de modelo, não observações.
 
-## Publicar no Render
+## Instalar no Render (no serviço existente)
 
-1. Extraia este ZIP e publique **seu conteúdo** na raiz de um novo repositório GitHub (por exemplo, `timezero-grib-worker`). Não publique arquivos `.env` nem senhas.
-2. No Render, abra o projeto `painel de bordo`, clique em **Create new service** > **Web Service** e conecte esse repositório.
-3. Configure **Language = Docker**, **Branch = main**, **Root Directory = vazio** e **Dockerfile Path = ./Dockerfile**. Não configure manualmente comandos Build/Start para este Dockerfile.
-4. Em **Environment**, crie `TIMEZERO_WORKER_SECRET` com uma chave aleatória **de pelo menos 32 caracteres**. A chave deve ser idêntica à cadastrada na Vercel.
-5. Configure o **Health Check Path** como `/health`, se o Render pedir.
-6. Faça o deploy. Acesse `https://SEU-SERVICO.onrender.com/health`. O esperado é `{"status":"ok","service":"timezero-grib-worker","eccodes":true}`.
-7. Na Vercel, no projeto Painel de Bordo V280, defina:
-   - `TIMEZERO_WORKER_URL=https://SEU-SERVICO.onrender.com/api/timezero-grib`
-   - `TIMEZERO_WORKER_SECRET` com a MESMA senha do Render
-   - `SUPABASE_SERVICE_ROLE_KEY` e `NEXT_PUBLIC_SUPABASE_URL` válidos (necessários para a rota Next.js V280).
-8. No Supabase, crie um bucket **privado** chamado `timezero-forecasts` e confira as permissões. Faça novo deploy do projeto V280 na Vercel.
+1. Substitua os arquivos do repositório GitHub do serviço `timezero-grib-worker` pelo conteúdo deste ZIP, preservando a raiz, inclusive `Dockerfile`, `server.py`, `noaa_generator.py`, `grib_generator.py`, `requirements.txt` e `render.yaml`.
+2. Faça commit na branch ligada ao Render. Render -> `timezero-grib-worker` -> `Deploys`: aguarde `Live`.
+3. Mantenha no Render a variável secreta `TIMEZERO_WORKER_SECRET` com o **mesmo valor na Vercel**. Não compartilhe o valor.
+4. Opcional: `NOAA_ENABLE_WAVES=false` (padrão). Só habilite `true` após verificar o mapeamento WW3, cobertura e teste TimeZero: downloads de ondas dobram as chamadas NOMADS e podem não estar disponíveis em todos os instantes.
+5. Teste `/health`. Exemplo: `https://timezero-grib-worker.onrender.com/health` deve apresentar `source: NOAA GFS 0.25`, `eccodes: true`.
 
-**Segurança:** não teste o endpoint de geração colocando a senha na URL ou no navegador. O endpoint exige o cabeçalho `X-Worker-Secret` e deve ser chamado pelo servidor Next.js. `/health` é público, mas não expõe segredos.
+**Importante:** endpoint agora é `/api/timezero-jobs` e não `/api/timezero-grib`. A V283 transforma automaticamente a antiga variável `TIMEZERO_WORKER_URL` que termina em `/api/timezero-grib`, mas é melhor alterá-la para `https://timezero-grib-worker.onrender.com/api/timezero-jobs`.
 
-## Funcionamento e limites
+## Como funciona
 
-- `GET /health` informa se o Python consegue importar o ecCodes.
-- `GET /api/timezero-grib?lat=-27&lon=-48&radius=30&hours=24&format=grb` exige `X-Worker-Secret` e devolve bytes GRIB1 ou erro JSON. Para `format=grbzip`, devolve ZIP com `grib.grb`.
-- Este serviço usa a geração da V280, com grade de 25 pontos e consultas Open-Meteo. Não está homologado para navegação.
-- O cache do worker fica na memória e a proteção de concorrência funciona **por instância**. Para múltiplas réplicas e uso comercial, implementar cache e limitador distribuídos, além de conferir os termos de licenciamento meteorológico.
-- O serviço não armazena previsões persistentemente; a **rota Next.js da V280** é responsável pelo armazenamento privado no Supabase Storage.
-- No plano que suspende serviços por inatividade, o primeiro acesso pode demorar e exceder o timeout de 50 segundos da rota Next.js. Considere um plano sem suspensão.
-- A compatibilidade com TimeZero Professional v4/v5 **não foi testada**. Validar manualmente a importação e as camadas de vento/onda/linha temporal antes de usar no mar.
-- O Dockerfile contém os pacotes Python para ecCodes. Não há API oficial do TimeZero nem credenciais TimeZero neste worker.
+Vercel inicia um trabalho autenticado (`GET /api/timezero-jobs?owner=...&lat=...&lon=...&radius=30&hours=24`), monitora `GET ...?owner=...&id=...`, baixa com `download=1&format=grb|grbzip` e grava no bucket privado do Supabase. O navegador nunca recebe a chave do worker. Processamento sequencial com fila, uma tarefa por vez; downloads NOMADS espaçados em pelo menos 10 segundos, como recomendado pela NOAA. Só as variáveis U/V (10 m, m/s) são garantidas pela seleção de campos; ondas não são inventadas. Timestamps em UTC e grade espacial real do modelo NOAA 0.25°.
 
-## Testar localmente
+O processamento pode levar **vários minutos**, especialmente para 120–168 h, por respeitar o intervalo de requisições NOAA. Um serviço Render gratuito pode suspender ou reiniciar tarefas em memória. O resultado concluído é salvo no Supabase pelo aplicativo, mas **tarefas ainda em andamento são voláteis** (para confiabilidade operacional use Render pago + fila persistente). Arquivos gerados num ciclo de modelo são guardados pelo cache diário da Vercel; isso não substitui atualização de ciclo monitorada.
 
-```bash
-python -m unittest discover -s tests -v
-# Se tiver Docker:
-docker build -t timezero-grib-worker .
-docker run --rm -p 10000:10000 -e TIMEZERO_WORKER_SECRET=COLOQUE_AQUI_SUA_CHAVE_FORTE timezero-grib-worker
-```
+## Limitações que não devem ser escondidas
 
-Não compartilhe `TIMEZERO_WORKER_SECRET`. Gere uma chave com PowerShell usando `RandomNumberGenerator` como instruído anteriormente.
+- Nenhum arquivo novo foi realmente baixado do NOMADS ou importado no TimeZero neste ambiente de desenvolvimento. Execute um teste end-to-end em produção.
+- Não foi comprovada a conversão ecCodes GRIB2->GRIB1 com dados NOAA reais nesta execução; validar com `grib_ls`, `grib_dump` e importação TimeZero v4/v5.
+- Sem ondas por padrão, pois a correspondência dos parâmetros WaveWatch III e a cobertura exigem teste real. A NOAA disponibiliza ondas em GRIB2, mas não é lícito rotular um parâmetro não verificado.
+- A API pública NOAA também aplica limites e recomenda >=10 s entre requisições automatizadas. Não há garantia de disponibilidade/tempo de execução.
+- Grade 0.25° é espacialmente grosseira, em particular para áreas de 30 MN. Recorte seleciona pontos nativos reais e pode incluir margem além do raio pedido.
+- Todo download válido deve ser conferido contra a previsão original NOAA e exibido no TimeZero antes de emprego operacional. Nunca use como única fonte de navegação/segurança no mar.
+
+## Diagnóstico
+
+`/health` confirma somente servidor/ecCodes. Erros de trabalho ficam visíveis no painel, e o Render registra `NOAA job failed: ...` sem coordenadas. 429 impõe cooldown com `Retry-After`; não fique clicando repetidas vezes.
