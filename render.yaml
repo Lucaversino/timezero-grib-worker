@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: timezero-grib-worker
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: TIMEZERO_WORKER_SECRET
+        sync: false
